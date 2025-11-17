@@ -12,31 +12,7 @@
     text-align: center;
     color: white;
   }
-  #loginBox {
-    margin-top: 30vh;
-  }
-  input {
-    padding: 10px;
-    width: 200px;
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    font-size: 16px;
-  }
-  button {
-    margin-left: 10px;
-    padding: 10px 20px;
-    border: none;
-    border-radius: 8px;
-    background-color: #c87b2e;
-    color: white;
-    cursor: pointer;
-    font-size: 16px;
-  }
-  button:hover {
-    background-color: #a86521;
-  }
   #poster {
-    display: none;
     width: 100vw;
     height: 100vh;
     object-fit: contain;
@@ -45,30 +21,7 @@
 </head>
 <body>
 
-<div id="loginBox">
-  <h2>🔒 카드뉴스 열람 인증</h2>
-  <p>비밀번호를 입력하세요</p>
-  <input type="password" id="pwInput" placeholder="예: 기획팀 화이팅!">
-  <button onclick="checkPW()">확인</button>
-</div>
-
-<img id="poster" src="./KakaoTalk_20251015_214213343.jpg" alt="2025 Fall Global Fair Poster">
-
-
-
-<script>
-  const correctPW = "cau2025"; // 비밀번호 설정
-
-  function checkPW() {
-    const input = document.getElementById("pwInput").value.trim();
-    if (input === correctPW) {
-      document.getElementById("loginBox").style.display = "none";
-      document.getElementById("poster").style.display = "block";
-    } else {
-      alert("비밀번호가 올바르지 않습니다.");
-    }
-  }
-</script>
+<img id="poster" src="./globalfair" alt="2025 Fall Global Fair Poster">
 
 </body>
 </html>
