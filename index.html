@@ -3,25 +3,106 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>2025 Fall Global Fair - Once Upon a Puang</title>
+<title>CAU Global Fair Treasure Hunt</title>
+
 <style>
   body {
     margin: 0;
-    background-color: #2b1a10;
+    padding: 0;
+    background: linear-gradient(135deg, #3d281a, #1f140d);
     font-family: 'Pretendard', sans-serif;
+    color: #fff;
     text-align: center;
-    color: white;
   }
-  #poster {
-    width: 100vw;
-    height: 100vh;
-    object-fit: contain;
+
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px;
   }
+
+  .card {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 25px;
+    backdrop-filter: blur(6px);
+    margin-top: 30px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.4);
+  }
+
+  .title {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+
+  .subtitle {
+    font-size: 18px;
+    line-height: 1.6;
+    margin-bottom: 15px;
+  }
+
+  .emoji {
+    font-size: 40px;
+    margin-bottom: 10px;
+  }
+
+  .poster-img {
+    width: 100%;
+    max-width: 320px;
+    border-radius: 16px;
+    margin: 20px auto;
+    display: block;
+  }
+
+  hr {
+    border: none;
+    height: 1px;
+    background: rgba(255,255,255,0.3);
+    margin: 25px 0;
+  }
+
 </style>
 </head>
 <body>
 
-<img id="poster" src="./globalfair.png" alt="2025 Fall Global Fair Poster">
+<div class="container">
+
+  <div class="card">
+    <div class="emoji">🎉🌍</div>
+    <div class="title">CAU Global Fair is happening now!</div>
+    <div class="subtitle">
+      Join the festival and explore cultures from all over the world! ✈️✨  
+      지금 중앙대는 글로벌페어 축제 중입니다!  
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="emoji">🔎🗺️</div>
+    <div class="title">Congrats! You found the Treasure! 🎁</div>
+    <img src="./globalfair.png" class="poster-img" alt="Treasure Poster">
+
+    <div class="subtitle">
+      🎉 축하드립니다! 숨겨진 보물을 찾으셨어요!  
+      <br><br>
+      📸 QR을 발견한 순간을 스크린샷으로 저장하고  
+      ☕🍿 따뜻한 **코코아와 팝콘**을 받으러 오세요!  
+      <br><br>
+      운영부스 방문 인증 없이 **바로 교환 가능합니다.**
+    </div>
+
+    <hr>
+
+    <div class="subtitle">
+      🎉 Congratulations!  
+      You’ve found the treasure of the Global Fair!  
+      Show your screenshot and enjoy **warm cocoa & popcorn**!  
+      <br><br>
+      Who’ll be the next treasure hunter? 👑🔥
+    </div>
+  </div>
+
+</div>
 
 </body>
 </html>
