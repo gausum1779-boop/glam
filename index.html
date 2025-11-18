@@ -1,48 +1,532 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CAU Global Fair Treasure Hunt</title>
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+from turtlesim.msg import Pose
+import math
+import time
+import matplotlib.pyplot as plt
 
-<style>
-  body {
-    margin: 0;
-    padding: 0;
-    background: #000; /* 포스터 대비를 위해 검정 배경 */
-    font-family: 'Pretendard', sans-serif;
-    color: #fff;
-    text-align: center;
-  }
 
-  .container {
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 20px;
-  }
+def angle_normalize(a: float) -> float:
+    """각도를 -π ~ π 범위로 정규화하는 함수
+    - 어떤 각도 a가 들어와도 [-pi, pi] 범위로 변환
+    - 회전 오차 계산할 때 항상 이 범위로 두면 편함 (wrap-around 문제 방지)
+    """
+    return math.atan2(math.sin(a), math.cos(a))
 
-  .poster-wrap {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-  }
 
-  .poster-img {
-    width: 100%;
-    max-width: 600px; /* 포스터 크게 보이도록 */
-    border-radius: 12px;
-    display: block;
-  }
-</style>
-</head>
+class PID:
+    """일반적인 PID 컨트롤러 구현 클래스"""
 
-<body>
+    def __init__(self, kp, ki, kd, clamp_i=1.0):
+        # 비례, 적분, 미분 계수
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
 
-<div class="container">
-  <div class="poster-wrap">
-    <img src="./globalfair.png" class="poster-img" alt="Treasure Poster">
-  </div>
-</div>
+        # 적분항 값
+        self.integral = 0.0
+        # 이전 오차 (미분항 계산용)
+        self.prev_err = 0.0
 
-</body>
-</html>
+        # 적분항이 너무 커지는 것 방지용 클램프(anti-windup)
+        self.clamp_i = clamp_i
+
+    def reset(self):
+        """컨트롤러 상태 초기화 (새 구간 들어갈 때 호출)"""
+        self.integral = 0.0
+        self.prev_err = 0.0
+
+    def update(self, err, dt):
+        """현재 오차 err와 시간 간격 dt를 받아 PID 출력 계산"""
+
+        # --- 적분항 업데이트 ---
+        self.integral += err * dt
+        # 적분항 제한 (windup 방지)
+        self.integral = max(min(self.integral, self.clamp_i), -self.clamp_i)
+
+        # --- 미분항 계산 ---
+        derivative = (err - self.prev_err) / dt if dt > 0 else 0.0
+        self.prev_err = err
+
+        # PID 출력 = Kp*e + Ki*∫e dt + Kd*de/dt
+        return self.kp * err + self.ki * self.integral + self.kd * derivative
+
+
+class TurtleSquareUltra(Node):
+    """turtlesim에서 정사각형을 아주 정밀하게 그리고
+    그 과정에서 각종 오차/제어입력 로그를 수집해서 그래프까지 그려주는 노드
+    """
+
+    def __init__(self):
+        super().__init__("turtle_square_ultra")
+
+        # ============ ROS pub / sub ============
+        # 속도 명령 publish
+        self.pub = self.create_publisher(Twist, "turtle1/cmd_vel", 10)
+        # 현재 pose subscribe
+        self.sub = self.create_subscription(
+            Pose, "/turtle1/pose", self.pose_cb, 10
+        )
+
+        # pose 데이터 저장용
+        self.pose = Pose()
+        self.pose_ready = False  # pose를 아직 한 번도 못 받았는지 여부
+
+        # ============ PID 컨트롤러 ============
+        # 직진할 때 heading 유지용 PID (angular.z 제어)
+        self.straight_pid = PID(kp=4.0, ki=0.01, kd=0.2, clamp_i=0.5)
+        # 제자리 회전할 때 목표 각도 맞추는 PID
+        self.turn_pid = PID(kp=5.0, ki=0.02, kd=0.3, clamp_i=0.5)
+
+        # 기준 heading (0, 90, 180, 270 중 하나로 스냅한 값)
+        # 전체 사각형을 이 기준축에 맞춰 그림
+        self.base_heading = None
+
+        # 로그용 기준 시간 (t=0 기준)
+        self.t0 = time.time()
+
+        # ====== 📊 로그 데이터 ======
+
+        # 1) 전체 궤적 / heading (시간 기준)
+        self.path_t = []          # 시간
+        self.path_x = []          # 위치 x
+        self.path_y = []          # 위치 y
+        self.path_heading = []    # heading(각도)
+
+        # 2) 직진 구간 로그 (거리 기준)
+        self.segment_count = 0          # 몇 번째 직선 변인지 (1,2,3,...)
+        self.straight_seg_idx = []      # 각 샘플이 어느 변에 속하는지
+        self.lat_err_s = []             # 그 변에서 전진한 거리 s [m]
+        self.lat_err = []               # 횡방향 오차 [m] (이상 직선에서 옆으로 얼마나 벗어났는지)
+        self.lat_head_err = []          # 직진 중 heading 오차 [rad]
+        self.straight_w = []            # 직진 중 angular.z 제어입력
+
+        # 3) 회전 구간 로그
+        self.turn_err = []              # 회전 중 순간순간의 각도 오차 [rad]
+        self.turn_w = []                # 회전 중 angular.z 제어입력
+        self.turn_final_err = []        # 각 턴이 끝났을 때의 최종 heading 오차 [rad]
+
+        # 4) 각 코너에서의 x, y, heading 오차
+        self.corner_ref = []           # 이상적인 4개 코너 좌표 ([(x0,y0), (x1,y1), ...])
+        self.corner_err_x = []         # 실제 - 이상 x 오차
+        self.corner_err_y = []         # 실제 - 이상 y 오차
+        self.corner_err_heading = []   # 코너별 heading 오차 (rad)
+
+        self.get_logger().info("🚀 TurtleSquareUltra initialized")
+
+    # -------------------------------------------------
+    # Pose 콜백 + 궤적/heading 시간 로그
+    # -------------------------------------------------
+    def pose_cb(self, msg: Pose):
+        """turtlesim이 pose를 publish 할 때마다 호출되는 콜백
+        - 현재 pose 저장
+        - 시간 기준 궤적/heading 로그 쌓기
+        """
+        self.pose = msg
+        self.pose_ready = True
+
+        t = time.time() - self.t0
+        self.path_t.append(t)
+        self.path_x.append(msg.x)
+        self.path_y.append(msg.y)
+        self.path_heading.append(msg.theta)
+
+    # -------------------------------------------------
+    # pose가 준비될 때까지 spin_once
+    # -------------------------------------------------
+    def wait_for_pose(self):
+        """처음에는 pose를 아직 못 받았을 수 있으니
+        pose_ready가 True 될 때까지 spin_once 반복"""
+        while rclpy.ok() and not self.pose_ready:
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+    # -------------------------------------------------
+    # 정지 (ROS 컨텍스트 살아있을 때만 publish)
+    # -------------------------------------------------
+    def stop(self):
+        """로봇 정지: linear, angular 모두 0으로 publish
+        rclpy가 이미 shutdown 된 상태여도 예외는 잡아서 무시
+        """
+        try:
+            if rclpy.ok():
+                self.pub.publish(Twist())
+        except Exception as e:
+            print(f"[stop] publish 실패 (무시함): {e}")
+
+    # -------------------------------------------------
+    # PID 직진 : 거리 기반 횡방향/heading 오차 + 제어입력 로깅
+    # -------------------------------------------------
+    def move_forward_pid(self, distance=2.0, speed=1.5, target_heading=None):
+        """지정한 거리(distance)만큼 target_heading 방향으로 PID 직진
+        - 직진하면서 heading 오차 → PID로 angular.z 제어
+        - 동시에 횡방향 오차(lat_error)를 계산해서 로그로 저장
+        """
+        self.wait_for_pose()
+        self.straight_pid.reset()
+
+        # 출발 위치
+        start_x = self.pose.x
+        start_y = self.pose.y
+
+        # target_heading이 없으면 현재 heading을 그대로 사용
+        if target_heading is None:
+            target_heading = self.pose.theta
+        target_heading = angle_normalize(target_heading)
+
+        msg = Twist()
+        last_time = time.time()
+
+        # --- 횡방향 오차 계산용 단위 법선벡터 n ---
+        # 진행 방향 단위벡터 d = (cosθ, sinθ)
+        # d에 수직인 법선 n = (-sinθ, cosθ)
+        # 직선에서 좌/우로 얼마나 벗어났는지 측정할 때 사용
+        n_x = -math.sin(target_heading)
+        n_y = math.cos(target_heading)
+
+        # 현재 직선 변 번호 (로그에서 구분용)
+        seg = self.segment_count
+
+        while rclpy.ok():
+            # 출발점 기준 이동량
+            dx = self.pose.x - start_x
+            dy = self.pose.y - start_y
+            moved = math.hypot(dx, dy)  # 이 변에서 전진한 거리 s
+
+            # 목표 거리만큼 이동하면 루프 종료
+            if moved >= distance:
+                break
+
+            # 선속도 설정
+            # → 끝에 가까워질수록 줄여서 overshoot 줄이기
+            msg.linear.x = speed * max(0.3, 1.0 - moved / distance)
+
+            # 현재 heading과 목표 heading 차이 (오차)
+            current_heading = self.pose.theta
+            err = angle_normalize(target_heading - current_heading)
+
+            # 👉 횡방향 오차 계산
+            # 출발점에서 현재 위치까지 벡터 (dx, dy)를
+            # 법선벡터 n에 투영한 값 = 직선에서 옆으로 벗어난 거리
+            lat_error = dx * n_x + dy * n_y   # [m]
+
+            # 👉 직진 구간 로그 (x축 = 거리 s)
+            self.straight_seg_idx.append(seg)  # 몇 번째 변인지
+            self.lat_err_s.append(moved)       # 그 변에서 얼마만큼 왔는지
+            self.lat_err.append(lat_error)     # 그때 횡방향 오차
+            self.lat_head_err.append(err)      # 그때 heading 오차
+
+            # PID dt
+            now = time.time()
+            dt = now - last_time
+            last_time = now
+
+            # heading 오차를 PID 컨트롤러에 넣어서 각속도 계산
+            w = self.straight_pid.update(err, dt)
+
+            # 각속도 너무 크지 않게 saturate
+            max_w = 1.0
+            if abs(w) > max_w:
+                w = max_w if w > 0 else -max_w
+
+            msg.angular.z = w
+
+            # 👉 직진 중 조향 제어입력 로그
+            self.straight_w.append(w)
+
+            # 실제 publish + pose 갱신
+            self.pub.publish(msg)
+            rclpy.spin_once(self, timeout_sec=0.01)
+
+        # 직진 끝나면 정지
+        self.stop()
+
+    # -------------------------------------------------
+    # 절대각 PID 회전 : 회전 오차 + 제어입력 + 최종 오차 로깅
+    # -------------------------------------------------
+    def rotate_to_angle_pid(self, target_angle):
+        """현재 위치에서 목표 절대각(target_angle)까지 PID 회전
+        - 제자리에서 도는 동작
+        - 회전 중 오차/제어입력을 샘플링해서 로그로 남기고
+          마지막에 남은 최종 오차도 따로 기록
+        """
+        self.wait_for_pose()
+        msg = Twist()
+        self.turn_pid.reset()
+
+        last_time = time.time()
+        # 회전 종료 오차 허용 범위
+        # 1e-3 rad ≈ 0.057° 정도 (아주 작은 각)
+        tol = 1e-3
+        final_err = 0.0
+
+        while rclpy.ok():
+            current = self.pose.theta
+            err = angle_normalize(target_angle - current)
+            final_err = err
+
+            # 👉 회전 오차 샘플 로그
+            self.turn_err.append(err)
+
+            # 오차가 충분히 작으면 회전 종료
+            if abs(err) < tol:
+                break
+
+            now = time.time()
+            dt = now - last_time
+            last_time = now
+
+            # PID 컨트롤로 각속도 계산
+            w = self.turn_pid.update(err, dt)
+
+            # 각속도 saturate
+            max_w = 1.0
+            if abs(w) > max_w:
+                w = max_w if w > 0 else -max_w
+
+            msg.linear.x = 0.0    # 회전만 하므로 직진은 0
+            msg.angular.z = w
+
+            # 👉 회전 중 제어입력 로그
+            self.turn_w.append(w)
+
+            self.pub.publish(msg)
+            rclpy.spin_once(self, timeout_sec=0.01)
+
+        # 각 턴이 끝났을 때 최종 heading 오차 기록 (부호 포함)
+        self.turn_final_err.append(final_err)
+
+        self.stop()
+
+    # -------------------------------------------------
+    # 사각형 그리기 (laps=None이면 무한 반복)
+    # -------------------------------------------------
+    def draw_square(self, side=2.0, laps=None):
+        """side 길이의 정사각형을 laps 바퀴 만큼 그림
+        - laps=None이면 무한 반복 (사용자가 Ctrl+C 칠 때까지)
+        - 현재 pose 기준으로 '이상적인 정사각형'을 정의하고
+          그 코너 좌표 대비 실제 코너 좌표 오차를 기록
+        """
+        self.wait_for_pose()
+
+        # 현재 heading을 가장 가까운 0/90/180/270° 축으로 스냅
+        raw = self.pose.theta
+        axis_idx = round(raw / (math.pi / 2.0))   # 0,1,2,3
+        self.base_heading = axis_idx * (math.pi / 2.0)
+
+        self.get_logger().info(
+            f"🧭 Snap: raw={raw:.4f}, base={self.base_heading:.4f}"
+        )
+
+        # === ✅ 이상적인 4개 코너 좌표 계산 (기준: 현재 위치) ===
+        x0, y0 = self.pose.x, self.pose.y
+        h0 = self.base_heading
+
+        # 첫 번째 변 방향 단위벡터 u
+        ux, uy = math.cos(h0), math.sin(h0)
+        # u에 수직인 v (반시계 방향 90도 회전)
+        vx, vy = -math.sin(h0), math.cos(h0)
+
+        # 이상적인 코너 c0~c3 계산
+        c0 = (x0, y0)
+        c1 = (x0 + side * ux,         y0 + side * uy)         # 첫 번째 변 끝
+        c2 = (c1[0] + side * vx,      c1[1] + side * vy)      # 두 번째 변 끝
+        c3 = (c2[0] - side * ux,      c2[1] - side * uy)      # 세 번째 변 끝
+        self.corner_ref = [c0, c1, c2, c3]
+
+        # 기준 각도(base_heading)으로 한 번 정렬
+        self.rotate_to_angle_pid(self.base_heading)
+
+        lap = 0
+        while rclpy.ok() and (laps is None or lap < laps):
+            # 한 바퀴 = 4개의 변
+            for i in range(4):
+                # i번째 변이 향해야 할 전역 heading (0°,90°,180°,270° 등)
+                side_heading = angle_normalize(
+                    self.base_heading + i * math.pi / 2.0
+                )
+
+                # 몇 번째 변인지 카운트 (거리-오차 그래프에서 구분용)
+                self.segment_count += 1
+
+                # --- 직진 수행 ---
+                self.move_forward_pid(
+                    distance=side,
+                    speed=1.5,
+                    target_heading=side_heading,
+                )
+
+                # === ✅ 코너에서 x, y, heading 오차 기록 ===
+                actual_x, actual_y = self.pose.x, self.pose.y
+                ref_x, ref_y = self.corner_ref[i]      # 이상적인 i번째 코너
+
+                # 위치 오차 (실제 - 이상)
+                ex = actual_x - ref_x
+                ey = actual_y - ref_y
+                self.corner_err_x.append(ex)
+                self.corner_err_y.append(ey)
+
+                # 해당 코너에서의 이상적인 heading = side_heading
+                current_heading = self.pose.theta
+                h_err = angle_normalize(side_heading - current_heading)
+                self.corner_err_heading.append(h_err)
+
+                # 다음 변 방향으로 회전
+                next_heading = angle_normalize(
+                    self.base_heading + (i + 1) * math.pi / 2.0
+                )
+                self.rotate_to_angle_pid(next_heading)
+
+            lap += 1
+            self.get_logger().info(f"✔ Lap {lap} finished")
+
+    # -------------------------------------------------
+    # 📊 로그 기반 그래프 그리기
+    # -------------------------------------------------
+    def plot_logs(self):
+        """지금까지 쌓아둔 로그를 가지고
+        - 궤적 vs 이상 사각형
+        - 각 side 끝에서의 최종 lateral error
+        - 각 turn 후의 최종 heading error
+        - 각 corner에서의 ex, ey, eθ
+        그래프로 시각화"""
+        if len(self.path_t) == 0:
+            print("No log data to plot.")
+            return
+
+        # =========================
+        # FIGURE 1 : 궤적 (실제 vs 이상 사각형)
+        # =========================
+        fig1, ax1 = plt.subplots(1, 1, figsize=(6, 6))
+        ax1.plot(self.path_x, self.path_y, marker=".", label="Actual path")
+
+        # 이상적인 사각형 경로 (corner_ref 기준)
+        if len(self.corner_ref) == 4:
+            xs_ideal = [c[0] for c in self.corner_ref] + [self.corner_ref[0][0]]
+            ys_ideal = [c[1] for c in self.corner_ref] + [self.corner_ref[0][1]]
+            ax1.plot(xs_ideal, ys_ideal, "--", label="Ideal square")
+
+        ax1.set_title("Turtle Trajectory (Actual vs Ideal)")
+        ax1.set_xlabel("X")
+        ax1.set_ylabel("Y")
+        ax1.set_aspect("equal", "box")
+        ax1.grid(True)
+        ax1.legend()
+        fig1.tight_layout()
+
+        # =========================
+        # FIGURE 2 : 각 side 끝에서의 최종 lateral error
+        # =========================
+        fig2, ax2 = plt.subplots(1, 1, figsize=(8, 5))
+
+        final_lat_errors = []
+        if len(self.lat_err_s) > 0:
+            # 기록된 모든 변 번호 집합
+            segments = sorted(set(self.straight_seg_idx))
+            for seg in segments:
+                # 해당 변(seg)에 속하는 인덱스들
+                indices = [idx for idx, sg in enumerate(self.straight_seg_idx) if sg == seg]
+                if not indices:
+                    continue
+                # 이 변에서 거리 s가 가장 큰 시점 = 변의 끝 지점
+                last_idx = max(indices, key=lambda k: self.lat_err_s[k])
+                # 그 지점의 횡방향 오차를 최종 오차로 사용
+                final_lat_errors.append(self.lat_err[last_idx])
+
+            side_indices = list(range(1, len(final_lat_errors) + 1))
+            ax2.bar(side_indices, final_lat_errors)
+            ax2.axhline(0.0, color="k", linestyle="dashed", linewidth=0.8)
+            ax2.set_title("Final Lateral Error at End of Each Side")
+            ax2.set_xlabel("Side index")
+            ax2.set_ylabel("Lateral error [m]")
+            ax2.grid(True)
+
+        fig2.tight_layout()
+
+        # =========================
+        # FIGURE 3 : 각 turn 후 최종 heading error
+        # =========================
+        fig3, ax3 = plt.subplots(1, 1, figsize=(8, 5))
+
+        if len(self.turn_final_err) > 0:
+            turn_idx = list(range(1, len(self.turn_final_err) + 1))
+            ax3.bar(
+                turn_idx,
+                [abs(e) * 180.0 / math.pi for e in self.turn_final_err]  # deg로 변환
+            )
+            ax3.set_title("Final Heading Error after Each Turn")
+            ax3.set_xlabel("Turn index")
+            ax3.set_ylabel("Error [deg]")
+            ax3.grid(True)
+
+        fig3.tight_layout()
+
+        # =========================
+        # FIGURE 4 : 코너별 x, y, heading 오차 (교수님 요구 ex, ey, eθ)
+        # =========================
+        if len(self.corner_err_x) > 0:
+            fig4, axes4 = plt.subplots(3, 1, figsize=(8, 10))
+            fig4.subplots_adjust(hspace=0.5)
+
+            N = len(self.corner_err_x)
+            idx = list(range(1, N + 1))
+
+            # (4-1) x 오차
+            axes4[0].bar(idx, self.corner_err_x)
+            axes4[0].set_title("Corner X Error")
+            axes4[0].set_xlabel("Corner index")
+            axes4[0].set_ylabel("e_x [m]")
+            axes4[0].grid(True)
+
+            # (4-2) y 오차
+            axes4[1].bar(idx, self.corner_err_y)
+            axes4[1].set_title("Corner Y Error")
+            axes4[1].set_xlabel("Corner index")
+            axes4[1].set_ylabel("e_y [m]")
+            axes4[1].grid(True)
+
+            # (4-3) heading 오차 (deg)
+            axes4[2].bar(
+                idx,
+                [e * 180.0 / math.pi for e in self.corner_err_heading]
+            )
+            axes4[2].set_title("Corner Heading Error")
+            axes4[2].set_xlabel("Corner index")
+            axes4[2].set_ylabel("e_heading [deg]")
+            axes4[2].grid(True)
+
+            fig4.tight_layout()
+
+        plt.show()
+
+
+# -------------------------------------------------
+# MAIN
+# -------------------------------------------------
+def main(args=None):
+    """노드 초기화 → 사각형 그리기 → Ctrl+C 시 로그 플로팅"""
+    rclpy.init(args=args)
+    node = TurtleSquareUltra()
+
+    try:
+        # laps=None 이면 무한 사각형 (Ctrl+C 칠 때까지 계속)
+        node.draw_square(side=2.0, laps=None)
+    except KeyboardInterrupt:
+        print("\n\n🛑 KeyboardInterrupt: plotting logs...")
+    finally:
+        # 정지 시도 (이미 shutdown 된 상태여도 stop 내부에서 예외 처리)
+        node.stop()
+
+        # ROS 종료: 이미 shutdown된 상태면 예외 무시
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception as e:
+            print(f"[shutdown] 이미 종료된 것 같아서 패스: {e}")
+
+        # 마지막으로 그래프 출력
+        node.plot_logs()
+
+
+if __name__ == "__main__":
+    main()
