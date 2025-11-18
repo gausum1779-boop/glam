@@ -9,53 +9,29 @@
   body {
     margin: 0;
     padding: 0;
-    background: linear-gradient(135deg, #3d281a, #1f140d);
+    background: #000; /* 포스터 대비를 위해 검정 배경 */
     font-family: 'Pretendard', sans-serif;
     color: #fff;
     text-align: center;
   }
 
   .container {
-    max-width: 900px;
+    max-width: 1000px;
     margin: 0 auto;
     padding: 20px;
   }
 
-  .card {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 16px;
-    padding: 25px;
-    backdrop-filter: blur(6px);
-    margin-top: 30px;
-    box-shadow: 0 0 20px rgba(0,0,0,0.4);
-  }
-
-  .subtitle {
-    font-size: 18px;
-    line-height: 1.7;
-    margin-bottom: 18px;
-    word-break: keep-all;
+  .poster-wrap {
+    display: flex;
+    justify-content: center;
+    align-items: center;
   }
 
   .poster-img {
     width: 100%;
-    max-width: 330px;
-    border-radius: 16px;
-    margin: 10px auto 22px;
+    max-width: 600px; /* 포스터 크게 보이도록 */
+    border-radius: 12px;
     display: block;
-  }
-
-  hr {
-    border: none;
-    height: 1px;
-    background: rgba(255,255,255,0.3);
-    margin: 30px 0;
-  }
-
-  .hashtags {
-    font-size: 17px;
-    margin-top: 12px;
-    opacity: 0.9;
   }
 </style>
 </head>
@@ -63,32 +39,8 @@
 <body>
 
 <div class="container">
-  <div class="card">
-
+  <div class="poster-wrap">
     <img src="./globalfair.png" class="poster-img" alt="Treasure Poster">
-
-    <!-- 한국어 안내 -->
-    <div class="subtitle">
-      보물을 찾으신 걸 축하드립니다! 🎉<br>
-      현장의 생생한 사진을 찍어서 인스타스토리에 올리면<br>
-      따뜻한 <strong>코코아와 팝콘</strong>을 드립니다! ☕🍿<br>
-      (운영부스 방문 없이 바로 수령 가능합니다)
-    </div>
-
-    <hr>
-
-    <!-- 영어 안내 -->
-    <div class="subtitle">
-      🎉 <strong>Congrats on finding the treasure!</strong><br>
-      Post a photo of the Global Fair<br>
-      on your Instagram Story<br>
-      to get warm <strong>cocoa and popcorn</strong>! ☕🍿
-    </div>
-
-    <div class="hashtags">
-      #glam @cau_glam
-    </div>
-
   </div>
 </div>
 
