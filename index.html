@@ -9,19 +9,20 @@
   body {
     margin: 0;
     padding: 0;
-    height: 100vh;
+    min-height: 100vh; 
     display: flex;
     justify-content: center;
-    align-items: center; /* 화면 정중앙 배치 */
-    background: #d7c6a3; /* 포스터 배경과 동일한 톤 */
+    align-items: flex-start; 
+    background: #d7c6a3;
     font-family: 'Pretendard', sans-serif;
+    padding-top: 20px;
   }
 
   .poster-img {
     width: 100%;
-    max-width: 700px; /* 모바일/PC 모두 적당한 크기 */
-    border-radius: 12px;
+    max-width: 700px;
     display: block;
+    border-radius: 12px;
   }
 </style>
 </head>
